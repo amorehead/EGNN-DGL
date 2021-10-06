@@ -1,0 +1,20 @@
+name: EGNN-DGL
+channels:
+  - pytorch
+  - conda-forge
+  - defaults
+  - anaconda
+dependencies:
+  - python==3.8
+  - pip==21.1.2
+  - pytorch==1.7.1
+  - torchvision==0.8.2
+  - torchaudio==0.7.2
+  - cudatoolkit=11.2
+  - numpy==1.21.2
+  - scipy==1.4.1
+  - pandas==1.2.4
+  - scikit-learn==0.24.2
+  - pip:
+      - -e .
+      - https://data.dgl.ai/wheels/dgl_cu110-0.6-cp38-cp38-manylinux1_x86_64.whl
