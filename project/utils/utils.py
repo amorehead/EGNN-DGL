@@ -2,6 +2,7 @@ import os
 from argparse import ArgumentParser
 
 import dgl
+import numpy as np
 import pytorch_lightning as pl
 import torch
 from pytorch_lightning.loggers import WandbLogger, TensorBoardLogger
@@ -90,12 +91,71 @@ def calculate_and_store_dists_in_graph(graph: dgl.DGLGraph, init=False):
     """Derive all node-node distance features from a given batch of DGLGraphs."""
     graphs = dgl.unbatch(graph)
     for graph in graphs:
-        graph.edata['c'] = graph.edata['c'] \
-            if init \
-            else graph.ndata['x'][graph.edges()[1]] - graph.ndata['x'][graph.edges()[0]]
+        graph.edata['c'] = graph.ndata['x'][graph.edges()[1]] - graph.ndata['x'][graph.edges()[0]]
         graph.edata['r'] = torch.sum(graph.edata['c'] ** 2, 1).reshape(-1, 1)
     graph = dgl.batch(graphs)
     return graph
+
+
+def get_graph(src, dst, pos, node_feature, edge_feature, dtype, undirected=True, num_nodes=None):
+    """Construct a single DGLGraph given source and destination node IDs, coordinates, and node and edge features."""
+    # src, dst : indices for vertices of source and destination, torch.Tensor
+    # pos: x, y, z coordinates of all vertices with respect to the indices, torch.Tensor
+    # node_feature: node feature of shape [num_nodes, node_feature_size], torch.Tensor
+    # edge_feature: edge feature of shape [num_nodes, edge_feature_size], torch.Tensor
+    if num_nodes:
+        G = dgl.graph((src, dst), num_nodes=num_nodes)
+    else:
+        G = dgl.graph((src, dst))
+    if undirected:
+        G = dgl.to_bidirected(G)
+    # Add node features to graph
+    G.ndata['f'] = node_feature.type(dtype)
+    G.ndata['x'] = pos.type(dtype)  # [num_nodes, 3]
+    # Add edge features to graph
+    G.edata['c'] = pos[dst] - pos[src]  # [num_nodes, 3]
+    G.edata['f'] = edge_feature.type(dtype)  # [num_nodes, edge_feature_size]
+    return G
+
+
+def get_rgraph(num_nodes: int, num_edges: int, node_feature_size: int,
+               edge_feature_size: int, dtype: torch.Type, test: bool):
+    G = dgl.rand_graph(num_nodes, num_edges)
+    if test:
+        src = torch.tensor([0, 0, 0, 1, 1, 1, 2, 2, 2, 3, 3, 3])
+        dst = torch.tensor([1, 2, 3, 0, 2, 3, 0, 1, 3, 0, 1, 2])
+    else:
+        src = G.edges()[0]
+        dst = G.edges()[1]
+    # Add node features to graph
+    pos = torch.ones(num_nodes, 3) if test else torch.rand((num_nodes, 3))  # [num_nodes, 3]
+    node_features = torch.ones(num_nodes, node_feature_size) if test else torch.rand((num_nodes, node_feature_size))
+    # Add edge features to graph
+    edge_features = torch.ones(num_edges, edge_feature_size) if test else torch.rand((num_edges, edge_feature_size))
+    return get_graph(src, dst, pos, node_features, edge_features, dtype, False, num_nodes=num_nodes)
+
+
+# -------------------------------------------------------------------------------------------------------------------------------------
+# Following code derived from egnn-pytorch (https://github.com/lucidrains/egnn-pytorch/blob/main/egnn_pytorch/utils.py):
+# -------------------------------------------------------------------------------------------------------------------------------------
+def rot_z(gamma):
+    return torch.tensor([
+        [torch.cos(gamma), -torch.sin(gamma), 0],
+        [torch.sin(gamma), torch.cos(gamma), 0],
+        [0, 0, 1]
+    ], dtype=gamma.dtype)
+
+
+def rot_y(beta):
+    return torch.tensor([
+        [torch.cos(beta), 0, torch.sin(beta)],
+        [0, 1, 0],
+        [-torch.sin(beta), 0, torch.cos(beta)]
+    ], dtype=beta.dtype)
+
+
+def rotate(alpha, beta, gamma):
+    return rot_z(alpha) @ rot_y(beta) @ rot_z(gamma)
 
 
 def collect_args():
@@ -180,9 +240,9 @@ def process_args(args):
 def construct_pl_logger(args):
     """Return a specific Logger instance requested by the user."""
     if args.logger_name.lower() == 'wandb':
-        return construct_tensorboard_pl_logger(args)
-    else:  # Default to using TensorBoard
         return construct_wandb_pl_logger(args)
+    else:  # Default to using TensorBoard
+        return construct_tensorboard_pl_logger(args)
 
 
 def construct_wandb_pl_logger(args):

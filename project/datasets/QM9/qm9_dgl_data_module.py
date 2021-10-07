@@ -54,10 +54,6 @@ class QM9DGLDataModule(LightningDataModule):
     def mean(self) -> int:
         return self.qm9_train.mean
 
-    def prepare_data(self):
-        # Download the full dataset - called only on 1 GPU
-        QM9DGLDataset(self.data_dir, self.task, mode='train', transform=RandomRotation())
-
     def setup(self, stage: Optional[str] = None):
         # Assign training/validation/testing data set for use in DataLoaders - called on every GPU
         self.qm9_train = QM9DGLDataset(self.data_dir, self.task, mode='train', transform=RandomRotation())

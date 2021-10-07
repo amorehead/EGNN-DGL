@@ -133,3 +133,9 @@ dmypy.json
 
 # QM9
 QM9_data.pt
+
+# TensorBoard
+tb_logs/
+
+# WandB
+wandb/

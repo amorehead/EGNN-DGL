@@ -1,4 +1,5 @@
 from argparse import ArgumentParser
+from typing import List
 
 import dgl
 import dgl.function as fn
@@ -438,6 +439,7 @@ class LitEGNN(pl.LightningModule):
         self.num_node_input_feats = num_node_input_feats
         self.num_edge_input_feats = num_edge_input_feats
         self.gnn_activ_fn = gnn_activ_fn
+        self.num_out_channels = 1
 
         # GNN module's keyword arguments provided via the command line
         self.num_gnn_layers = num_gnn_layers
@@ -458,7 +460,7 @@ class LitEGNN(pl.LightningModule):
             else nn.Identity()
 
         # Assemble the layers of the network
-        self.build_gnn_module()
+        self.build_gnn_module(), self.build_fc_module()
 
         # Declare loss functions and metrics for training, validation, and testing
         self.loss_fn = nn.MSELoss()
@@ -476,25 +478,36 @@ class LitEGNN(pl.LightningModule):
     def build_gnn_module(self):
         """Define all layers for the chosen GNN module."""
         # Marshal all GNN layers, allowing the user to choose which kind of graph learning scheme they would like to use
-        gnn_layers = [DGLEnGraphConv(
-            num_input_feats=self.num_gnn_hidden_channels,
-            num_hidden_feats=self.num_gnn_hidden_channels,
-            num_output_feats=self.num_gnn_hidden_channels,
-            num_edge_input_feats=self.num_edge_input_feats,
-            activ_fn=self.gnn_activ_fn,
-            residual=True,  # Whether to employ a residual connection during equivariant message-passing
-            simple_attention=False,  # Whether to apply a simple gating-based attention mechanism on edge messages
-            adv_attention=False,  # Whether to apply the Graph Transformer prior to equivariant message-passing
-            num_attention_heads=self.num_gnn_attention_heads,
-            attention_use_bias=False,
-            norm_to_apply='batch',
-            normalize_coord_diff=False,
-            tanh=False,
-            dropout_rate=self.dropout_rate,
-            coords_aggr='mean',
-            update_feats=True,
-            update_coords=True) for _ in range(self.num_gnn_layers)]
+        gnn_layers = [
+            DGLEnGraphConv(
+                num_input_feats=self.num_gnn_hidden_channels,
+                num_hidden_feats=self.num_gnn_hidden_channels,
+                num_output_feats=self.num_gnn_hidden_channels,
+                num_edge_input_feats=self.num_edge_input_feats,
+                activ_fn=self.gnn_activ_fn,
+                residual=True,  # Whether to employ a residual connection during equivariant message-passing
+                simple_attention=False,  # Whether to apply a simple gating-based attention mechanism on edge messages
+                adv_attention=False,  # Whether to apply the Graph Transformer prior to equivariant message-passing
+                num_attention_heads=self.num_gnn_attention_heads,
+                attention_use_bias=False,
+                norm_to_apply='batch',
+                normalize_coord_diff=False,
+                tanh=False,
+                dropout_rate=self.dropout_rate,
+                coords_aggr='mean',
+                update_feats=True,
+                update_coords=True
+            )
+            for _ in range(self.num_gnn_layers)
+        ]
         self.gnn_module = nn.ModuleList(gnn_layers)
+
+    def build_fc_module(self):
+        self.fc_module = nn.Sequential(
+            nn.Linear(self.num_gnn_hidden_channels, self.num_gnn_hidden_channels),
+            nn.ReLU(inplace=True),
+            nn.Linear(self.num_gnn_hidden_channels, self.num_out_channels)
+        )
 
     # ---------------------
     # Training
@@ -503,27 +516,39 @@ class LitEGNN(pl.LightningModule):
         """Make a forward pass through a single GNN module."""
         # Embed input features a priori
         if self.using_node_embedding:
-            graph.ndata['f'] = self.node_in_embedding(graph.ndata['f']).squeeze()
+            graph.ndata['f'] = self.node_in_embedding(graph.ndata['f'].squeeze()).squeeze()
         # Forward propagate with each GNN layer
         for layer in self.gnn_module:
             # Cache the original batch number of nodes and edges
             batch_num_nodes, batch_num_edges = graph.batch_num_nodes(), graph.batch_num_edges()
-            graph = layer(graph).squeeze()
+            graph = layer(graph)
             # Retain the original batch number of nodes and edges
             graph.set_batch_num_nodes(batch_num_nodes), graph.set_batch_num_edges(batch_num_edges)
-        # Return the updated graph
-        return graph
+        # Return the updated graph batch
+        graphs = dgl.unbatch(graph)
+        logits_list = [batched_graph.ndata['f'] for batched_graph in graphs]
+        return logits_list
+
+    def fc_forward(self, logits_list: List[torch.Tensor]):
+        """Forward propagate with the final fully-connected layer(s)."""
+        fc_logits = []
+        for logits in logits_list:
+            fc_logits_summed = torch.sum(self.fc_module(logits), dim=0)
+            fc_logits.append(fc_logits_summed)
+        logits = torch.cat(fc_logits)
+        return logits
 
     def shared_step(self, graph: dgl.DGLGraph):
         """Make a forward pass through the entire network."""
         # Learn from each input graph
-        logits = self.gnn_forward(graph)
+        logits_list = self.gnn_forward(graph)
+        logits = self.fc_forward(logits_list)
         return logits
 
-    def train_step(self, batch, batch_idx):
+    def training_step(self, batch, batch_idx):
         """Lightning calls this inside the training loop."""
         # Make a forward pass through the network for a batch of input graphs
-        graph, labels = batch, batch['label']
+        graph, labels = batch[0], batch[1].squeeze()
 
         # Forward propagate with network layers
         logits = self.shared_step(graph)
@@ -541,7 +566,7 @@ class LitEGNN(pl.LightningModule):
     def validation_step(self, batch, batch_idx):
         """Lightning calls this inside the validation loop."""
         # Make a forward pass through the network for a batch of input graphs
-        graph, labels = batch, batch['label']
+        graph, labels = batch[0], batch[1].squeeze()
 
         # Forward propagate with network layers
         logits = self.shared_step(graph)
@@ -559,7 +584,7 @@ class LitEGNN(pl.LightningModule):
     def test_step(self, batch, batch_idx):
         """Lightning calls this inside the testing loop."""
         # Make a forward pass through the network for a batch of input graphs
-        graph, labels = batch, batch['label']
+        graph, labels = batch[0], batch[1].squeeze()
 
         # Forward propagate with network layers
         logits = self.shared_step(graph)

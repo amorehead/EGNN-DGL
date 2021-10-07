@@ -113,7 +113,8 @@ class QM9DGLDataset(Dataset):
 
         return np.array(src), np.array(dst), np.array(w)
 
-    def connect_partially(self, edge):
+    @staticmethod
+    def connect_partially(edge):
         src = np.concatenate([edge[:, 0], edge[:, 1]])
         dst = np.concatenate([edge[:, 1], edge[:, 0]])
         w = np.concatenate([edge[:, 2], edge[:, 2]])
@@ -154,7 +155,8 @@ class QM9DGLDataset(Dataset):
         G.ndata['f'] = torch.tensor(np.concatenate([one_hot, atomic_numbers], -1)[..., None])  # [num_atoms,6,1]
 
         # Add edge features to graph
-        G.edata['d'] = torch.tensor(x[dst] - x[src])  # [num_atoms,3]
-        G.edata['w'] = torch.tensor(w)  # [num_atoms,4]
+        # G.edata['d'] = torch.tensor(x[dst] - x[src])  # [num_atoms,3]
+        # G.edata['w'] = torch.tensor(w)  # [num_atoms,4]
+        G.edata['f'] = torch.tensor(w)  # [num_atoms,4] - Use edge weights as primary edge features
 
         return G, y

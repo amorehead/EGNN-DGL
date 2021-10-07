@@ -2,6 +2,7 @@ import os
 from pathlib import Path
 
 import pytorch_lightning as pl
+import torch.autograd
 import torch.nn as nn
 from pytorch_lightning.plugins import DDPPlugin
 
@@ -16,7 +17,6 @@ def main(args):
     # -----------
     # Load QM9 data module
     qm9_data_module = QM9DGLDataModule(batch_size=args.batch_size, num_dataloader_workers=args.num_workers)
-    qm9_data_module.prepare_data()
     qm9_data_module.setup()
 
     # ------------
@@ -85,7 +85,7 @@ def main(args):
     # Callbacks
     # -----------
     # Create and use callbacks
-    mode = 'min' if 'ce' in args.metric_to_track else 'max'
+    mode = 'min' if 'mse' in args.metric_to_track else 'max'
     early_stop_callback = pl.callbacks.EarlyStopping(monitor=args.metric_to_track,
                                                      mode=mode,
                                                      min_delta=args.min_delta,
@@ -161,7 +161,8 @@ if __name__ == '__main__':
     # Set plugins for Lightning
     args.plugins = [
         # 'ddp_sharded',  # For sharded model training (to reduce GPU requirements)
-        DDPPlugin(find_unused_parameters=False)
+        # We only select certain edge messages to update coordinates equivariantly, so we must ignore unused parameters
+        DDPPlugin(find_unused_parameters=True)
     ]
 
     # Finalize all arguments as necessary
