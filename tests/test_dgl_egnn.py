@@ -8,11 +8,11 @@ from project.utils.utils import rotate
 
 def test_dgl_egnn():
     # Declare hyperparameters for testing
-    num_nodes = 4
-    num_edges = 12
-    num_node_input_feats = 1
-    num_gnn_hidden_channels = 32
-    num_edge_input_feats = 1
+    num_nodes = 16
+    num_edges = 16
+    num_node_input_feats = 512
+    num_gnn_hidden_channels = 512
+    num_edge_input_feats = 4
     num_test_layers = 4
     activ_fn = nn.GELU() if num_test_layers > 16 else nn.SiLU()
     tanh = num_test_layers > 16
@@ -20,20 +20,16 @@ def test_dgl_egnn():
 
     # Initialize EGNN embedding layers
     using_node_embeddings = num_node_input_feats != num_gnn_hidden_channels
-    using_edge_embedding = num_edge_input_feats != num_gnn_hidden_channels
     node_in_embedding = nn.Linear(num_node_input_feats, num_gnn_hidden_channels) \
         if using_node_embeddings \
         else nn.Identity()
     node_out_embedding = nn.Linear(num_gnn_hidden_channels, num_node_input_feats) \
         if using_node_embeddings \
         else nn.Identity()
-    edge_in_embedding = nn.Linear(num_edge_input_feats, num_gnn_hidden_channels) \
-        if using_edge_embedding \
-        else nn.Identity()
 
     # Initialize DGL EGNN layers for testing
     layer = DGLEnGraphConv(
-        num_input_feats=num_gnn_hidden_channels,
+        num_input_feats=num_gnn_hidden_channels if using_node_embeddings else num_node_input_feats,
         num_hidden_feats=num_gnn_hidden_channels,
         num_output_feats=num_gnn_hidden_channels,
         num_edge_input_feats=num_edge_input_feats,
@@ -46,7 +42,7 @@ def test_dgl_egnn():
         norm_to_apply='batch',
         normalize_coord_diff=False,
         tanh=tanh,
-        dropout=0.1,
+        dropout=0.0,
         coords_aggr='mean',
         update_feats=True,
         update_coords=True,
@@ -90,19 +86,24 @@ def test_dgl_egnn():
     if using_node_embeddings:
         node_feats = node_in_embedding(node_feats)
         node_feats_permuted_row_wise = node_in_embedding(node_feats_permuted_row_wise)
-    if using_edge_embedding:
-        edge_feats = edge_in_embedding(edge_feats)
+
+    # Store latest node and edge features in base random graphs
+    rgraph.ndata['f'], rgraph.edata['f'] = node_feats, edge_feats
+    rgraph1, rgraph2, rgraph3 = rgraph.clone(), rgraph.clone(), rgraph.clone()
 
     # Convolve over graph nodes and edges
-    node_feats1, node_coords1, edge_feats1 = layer(
-        rgraph, node_feats, node_coords @ R + T, edge_feats
-    )
-    node_feats2, node_coords2, edge_feats2 = layer(
-        rgraph, node_feats, node_coords, edge_feats
-    )
-    node_feats3, node_coords3, edge_feats3 = layer(
-        rgraph, node_feats_permuted_row_wise, node_coords, edge_feats
-    )
+    rgraph1.ndata['x'] = (node_coords @ R + T).clone().detach()
+    rgraph1 = layer(rgraph1)
+    node_feats1, node_coords1 = rgraph1.ndata['f'], rgraph1.ndata['x']
+
+    rgraph2 = rgraph.clone()
+    rgraph2 = layer(rgraph2)
+    node_feats2, node_coords2 = rgraph2.ndata['f'], rgraph2.ndata['x']
+
+    rgraph3 = rgraph.clone()
+    rgraph3.ndata['f'] = node_feats_permuted_row_wise.clone().detach()
+    rgraph3 = layer(rgraph3)
+    node_feats3, node_coords3 = rgraph3.ndata['f'], rgraph3.ndata['x']
 
     # Project learned node features' dimensionality a posteriori
     node_feats1 = node_out_embedding(node_feats1)
@@ -110,7 +111,7 @@ def test_dgl_egnn():
     node_feats3 = node_out_embedding(node_feats3)
 
     assert torch.allclose(node_feats1, node_feats2, atol=1e-6), 'Type 0 features are invariant'
-    assert torch.allclose(node_coords1, (node_coords2 @ R + T), atol=1e-4), 'Type 1 features are equivariant'
+    assert torch.allclose(node_coords1, (node_coords2 @ R + T), atol=1e-6), 'Type 1 features are equivariant'
     assert not torch.allclose(node_feats1, node_feats3, atol=1e-6), 'Layer must be equivariant to node permutations'
 
     # Run specific test case against original EGNN layer

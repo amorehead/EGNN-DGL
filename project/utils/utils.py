@@ -87,7 +87,7 @@ def glorot_orthogonal(tensor, scale):
         tensor.data *= scale.sqrt()
 
 
-def calculate_and_store_dists_in_graph(graph: dgl.DGLGraph, init=False):
+def calculate_and_store_dists_in_graph(graph: dgl.DGLGraph):
     """Derive all node-node distance features from a given batch of DGLGraphs."""
     graphs = dgl.unbatch(graph)
     for graph in graphs:
