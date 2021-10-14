@@ -137,7 +137,6 @@ class DGLEnGraphConv(nn.Module):
             norm_to_apply='batch',
             normalize_coord_diff=False,
             tanh=False,
-            dropout_rate=0.1,
             coords_aggr='mean',
             update_feats=True,
             update_coords=True,
@@ -171,8 +170,6 @@ class DGLEnGraphConv(nn.Module):
             Whether to normalize the difference between node coordinates before applying MLPs.
         tanh : bool
             Whether to use a hyperbolic tangent function while applying the coordinates MLP.
-        dropout_rate : float
-            How much dropout (i.e. forget rate) to apply before activation functions.
         coords_aggr : str
             How to update coordinates (i.e. 'mean', 'sum').
         update_feats : bool
@@ -198,7 +195,6 @@ class DGLEnGraphConv(nn.Module):
         self.norm_to_apply = norm_to_apply
         self.normalize_coord_diff = normalize_coord_diff
         self.tanh = tanh
-        self.dropout_rate = dropout_rate
         self.coords_aggr = coords_aggr
         self.update_feats = update_feats
         self.update_coords = update_coords
@@ -208,11 +204,9 @@ class DGLEnGraphConv(nn.Module):
         self.num_edge_coord_feats = 1
 
         # Define edge features multi-layer perceptron (MLP)
-        self.dropout = nn.Dropout(self.dropout_rate) if self.dropout_rate > 0 else nn.Identity()
         self.edge_mlp_input_dim = (self.num_input_feats * 2) + self.num_edge_coord_feats + self.num_edge_input_feats
         self.edges_mlp = nn.Sequential(
             nn.Linear(self.edge_mlp_input_dim, self.num_hidden_feats),
-            self.dropout,
             self.activ_fn,
             nn.Linear(self.num_hidden_feats, self.num_hidden_feats),
             self.activ_fn
@@ -222,7 +216,6 @@ class DGLEnGraphConv(nn.Module):
         self.nodes_mlp_input_dim = self.num_hidden_feats + self.num_input_feats
         self.nodes_mlp = nn.Sequential(
             nn.Linear(self.nodes_mlp_input_dim, self.num_hidden_feats),
-            self.dropout,
             self.activ_fn,
             nn.Linear(self.num_hidden_feats, self.num_output_feats)
         ) if self.update_feats else None
@@ -235,7 +228,6 @@ class DGLEnGraphConv(nn.Module):
         self.tanh = nn.Tanh() if self.tanh else nn.Identity()
         self.coords_mlp = nn.Sequential(
             nn.Linear(self.num_hidden_feats, self.num_hidden_feats),
-            self.dropout,
             self.activ_fn,
             coords_module,
             self.tanh
@@ -300,9 +292,6 @@ class DGLEnGraphConv(nn.Module):
         h = h_attn_out.view(-1, self.num_output_feats)
         e = e_attn_out.view(-1, self.num_output_feats)
 
-        h = F.dropout(h, self.dropout_rate, training=self.training)
-        e = F.dropout(e, self.dropout_rate, training=self.training)
-
         h = self.O_h(h)
         e = self.O_e(e)
 
@@ -323,13 +312,11 @@ class DGLEnGraphConv(nn.Module):
         # FFN for h
         h = self.FFN_h_layer1(h)
         h = F.relu(h)
-        h = F.dropout(h, self.dropout_rate, training=self.training)
         h = self.FFN_h_layer2(h)
 
         # FFN for e
         e = self.FFN_e_layer1(e)
         e = F.relu(e)
-        e = F.dropout(e, self.dropout_rate, training=self.training)
         e = self.FFN_e_layer2(e)
 
         if self.residual:
@@ -430,8 +417,8 @@ class LitEGNN(pl.LightningModule):
     """A LightningModule for the DGL implementation of the Equivariant Graph Neural Network (EGNN)."""
 
     def __init__(self, num_node_input_feats: int, num_edge_input_feats: int, gnn_activ_fn=nn.SiLU(), num_gnn_layers=2,
-                 num_gnn_hidden_channels=128, num_gnn_attention_heads=4, num_epochs=50, dropout_rate=0.1,
-                 metric_to_track='val_mse', weight_decay=1e-2, lr=1e-3):
+                 num_gnn_hidden_channels=128, num_gnn_attention_heads=4, num_epochs=50, metric_to_track='val_mse',
+                 weight_decay=1e-2, lr=1e-3):
         """Initialize all the parameters for a LitGINI module."""
         super().__init__()
 
@@ -448,7 +435,6 @@ class LitEGNN(pl.LightningModule):
 
         # Model hyperparameter keyword arguments provided via the command line
         self.num_epochs = num_epochs
-        self.dropout_rate = dropout_rate
         self.metric_to_track = metric_to_track
         self.weight_decay = weight_decay
         self.lr = lr
@@ -493,7 +479,6 @@ class LitEGNN(pl.LightningModule):
                 norm_to_apply='batch',
                 normalize_coord_diff=False,
                 tanh=False,
-                dropout_rate=self.dropout_rate,
                 coords_aggr='mean',
                 update_feats=True,
                 update_coords=True

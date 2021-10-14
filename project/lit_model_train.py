@@ -34,7 +34,6 @@ def main(args):
                     num_gnn_hidden_channels=dict_args['num_gnn_hidden_channels'],
                     num_gnn_attention_heads=dict_args['num_gnn_attention_heads'],
                     num_epochs=dict_args['num_epochs'],
-                    dropout_rate=dict_args['dropout_rate'],
                     metric_to_track=args.metric_to_track,
                     weight_decay=dict_args['weight_decay'],
                     lr=dict_args['lr'])
@@ -56,8 +55,7 @@ def main(args):
                                        use_wandb_logger=use_wandb_logger,
                                        batch_size=args.batch_size,
                                        lr=args.lr,
-                                       weight_decay=args.weight_decay,
-                                       dropout_rate=args.dropout_rate) if ckpt_provided else model
+                                       weight_decay=args.weight_decay) if ckpt_provided else model
 
     # ------------
     # Trainer

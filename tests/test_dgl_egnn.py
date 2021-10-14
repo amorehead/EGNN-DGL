@@ -42,7 +42,6 @@ def test_dgl_egnn():
         norm_to_apply='batch',
         normalize_coord_diff=False,
         tanh=tanh,
-        dropout=0.0,
         coords_aggr='mean',
         update_feats=True,
         update_coords=True,

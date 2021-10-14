@@ -193,7 +193,6 @@ def collect_args():
     parser.add_argument('--lr', type=float, default=1e-3, help='Learning rate')
     parser.add_argument('--weight_decay', type=float, default=1e-2, help='Decay rate of optimizer weight')
     parser.add_argument('--num_epochs', type=int, default=50, help='Maximum number of epochs to run for training')
-    parser.add_argument('--dropout_rate', type=float, default=0.1, help='Dropout (forget) rate')
     parser.add_argument('--patience', type=int, default=5, help='Number of epochs to wait until early stopping')
 
     # -----------------
