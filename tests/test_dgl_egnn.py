@@ -8,12 +8,13 @@ from project.utils.utils import rotate
 
 def test_dgl_egnn():
     # Declare hyperparameters for testing
-    num_nodes = 16
-    num_edges = 16
-    num_node_input_feats = 512
-    num_gnn_hidden_channels = 512
-    num_edge_input_feats = 4
-    num_test_layers = 4
+    num_nodes = 4
+    num_edges = 12
+    num_node_input_feats = 1
+    num_coords_input_feats = 3
+    num_gnn_hidden_channels = 32
+    num_edge_input_feats = 1
+    num_test_layers = 1
     activ_fn = nn.GELU() if num_test_layers > 16 else nn.SiLU()
     tanh = num_test_layers > 16
     test_against_orig_egnn = False
@@ -63,6 +64,11 @@ def test_dgl_egnn():
         dtype=torch.FloatTensor,
         test=test_against_orig_egnn
     )
+
+    # Make node and edge features match those from the original EGNN's unit test script
+    rgraph.ndata['f'] = torch.ones(num_nodes, num_node_input_feats)
+    rgraph.ndata['x'] = torch.ones(num_nodes, num_coords_input_feats)
+    rgraph.edata['f'] = torch.ones(num_edges, num_edge_input_feats)
 
     # Assemble node features for propagation
     node_feats = rgraph.ndata['f']

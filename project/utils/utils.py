@@ -113,7 +113,6 @@ def get_graph(src, dst, pos, node_feature, edge_feature, dtype, undirected=True,
     G.ndata['f'] = node_feature.type(dtype)
     G.ndata['x'] = pos.type(dtype)  # [num_nodes, 3]
     # Add edge features to graph
-    G.edata['c'] = pos[dst] - pos[src]  # [num_nodes, 3]
     G.edata['f'] = edge_feature.type(dtype)  # [num_nodes, edge_feature_size]
     return G
 
