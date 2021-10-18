@@ -138,8 +138,9 @@ class DGLEnGraphConv(nn.Module):
             normalize_coord_diff=False,
             tanh=False,
             coords_aggr='mean',
-            update_feats=True,
             update_coords=True,
+            update_feats=True,
+            self_loops=False,
             **kwargs
     ):
         """E(n)-equivariant Graph Conv Layer
@@ -172,10 +173,12 @@ class DGLEnGraphConv(nn.Module):
             Whether to use a hyperbolic tangent function while applying the coordinates MLP.
         coords_aggr : str
             How to update coordinates (i.e. 'mean', 'sum').
-        update_feats : bool
-            Whether to update node features in an invariant manner.
         update_coords : bool
             Whether to update coordinates in an equivariant manner.
+        update_feats : bool
+            Whether to update node features in an invariant manner.
+        self_loops : bool
+            Whether the input graphs contain self-loops.
         """
         assert update_feats or update_coords, 'You must update either features, coordinates, or both.'
         super().__init__()
@@ -196,8 +199,9 @@ class DGLEnGraphConv(nn.Module):
         self.normalize_coord_diff = normalize_coord_diff
         self.tanh = tanh
         self.coords_aggr = coords_aggr
-        self.update_feats = update_feats
         self.update_coords = update_coords
+        self.update_feats = update_feats
+        self.self_loops = self_loops
 
         # Pre-set parameters
         self.epsilon = 1e-8
@@ -222,16 +226,16 @@ class DGLEnGraphConv(nn.Module):
 
         # Initialize coordinates module a priori
         coords_module = nn.Linear(self.num_hidden_feats, 1, bias=False)
-        self.init_(coords_module)
+        torch.nn.init.xavier_uniform_(coords_module.weight, gain=0.001)
 
         # Define node coordinates multi-layer perceptron (MLP)
-        self.tanh = nn.Tanh() if self.tanh else nn.Identity()
-        self.coords_mlp = nn.Sequential(
-            nn.Linear(self.num_hidden_feats, self.num_hidden_feats),
-            self.activ_fn,
-            coords_module,
-            self.tanh
-        ) if self.update_coords else None
+        if self.update_coords:
+            self.coords_mlp = [nn.Linear(self.num_hidden_feats, self.num_hidden_feats)]
+            self.coords_mlp.append(self.activ_fn)
+            self.coords_mlp.append(coords_module)
+            if self.tanh:
+                self.coords_mlp.append(nn.Tanh())
+            self.coords_mlp = nn.Sequential(*self.coords_mlp)
 
         # Define an optional simple attention (i.e. soft edge) multi-layer perceptron (MLP) for inter-node messages
         self.attn_mlp = nn.Sequential(
@@ -274,12 +278,6 @@ class DGLEnGraphConv(nn.Module):
             else:  # Otherwise, default to using batch normalization
                 self.batch_norm2_h = nn.BatchNorm1d(self.num_output_feats)
                 self.batch_norm2_e = nn.BatchNorm1d(self.num_output_feats)
-
-    @staticmethod
-    def init_(module, gain=0.001):
-        """Initialize the weights for a given nn.Linear module using the normal distribution."""
-        if type(module) in {nn.Linear}:
-            nn.init.xavier_uniform_(module.weight, gain=gain)
 
     def apply_adv_attention(self, graph: dgl.DGLGraph, h: torch.Tensor, e: torch.Tensor):
         """Perform a forward pass using a graph multi-head attention module defined a priori."""
@@ -342,14 +340,73 @@ class DGLEnGraphConv(nn.Module):
             A batch of edges for which to compute messages
         """
 
-        edge_mlp_input = torch.cat([edges.dst['f'], edges.src['f'], edges.data['r'], edges.data['f']], dim=1)
+        edge_mlp_input = torch.cat([edges.src['f'], edges.dst['f'], edges.data['r'], edges.data['f']], dim=1)
         m_ij = self.edges_mlp(edge_mlp_input)
         if self.simple_attention:  # Optionally apply an attention operation to messages
             # Apply a soft edge weight via a simple attention MLP
             attn_m_ij = self.attn_mlp(m_ij)
             m_ij = m_ij * attn_m_ij
-        edges.data['m_ij'] = m_ij  # Preserve edge messages even after reduce_func (e.g. fn.sum()) has been called
+        edges.data['m_ij'] = m_ij  # Preserve edge messages in the event that a reduce_func is called
         return {'m_ij': m_ij}
+
+    @staticmethod
+    def unsorted_segment_sum(data, segment_ids, num_segments):
+        """Compute the sum of an unsorted segment of edges - Originally from https://github.com/vgsatorras/egnn."""
+        result_shape = (num_segments, data.size(1))
+        result = data.new_full(result_shape, 0)  # Initialize empty result tensor
+        segment_ids = segment_ids.unsqueeze(-1).expand(-1, data.size(1))
+        result.scatter_add_(0, segment_ids, data)
+        return result
+
+    @staticmethod
+    def unsorted_segment_mean(data, segment_ids, num_segments):
+        """Compute the mean of an unsorted segment of edges - Originally from https://github.com/vgsatorras/egnn."""
+        result_shape = (num_segments, data.size(1))
+        segment_ids = segment_ids.unsqueeze(-1).expand(-1, data.size(1))
+        result = data.new_full(result_shape, 0)  # Init empty result tensor.
+        count = data.new_full(result_shape, 0)
+        result.scatter_add_(0, segment_ids, data)
+        count.scatter_add_(0, segment_ids, torch.ones_like(data))
+        return result / count.clamp(min=1)
+
+    def update_node_coords(self, graph):
+        """In an E(n) equivariant manner, update the node coordinates in the given graph."""
+        if self.self_loops:
+            edge_index_diffs = graph.edges()[0] - graph.edges()[1]
+            selected_src_edge_indices = (edge_index_diffs != 0).nonzero(as_tuple=False).squeeze()
+            coord_diffs = graph.edata['c'][selected_src_edge_indices]
+            edge_messages = graph.edata['m_ij'][selected_src_edge_indices]
+        else:
+            selected_src_edge_indices = graph.edges()[0]  #
+            coord_diffs = graph.edata['c']
+            edge_messages = graph.edata['m_ij']
+
+        x_trans = coord_diffs * self.coords_mlp(edge_messages)
+        if self.coords_aggr == 'mean':  # Default to self.coords_aggr == 'mean'
+            x_aggr = self.unsorted_segment_mean(
+                x_trans, selected_src_edge_indices, num_segments=graph.ndata['x'].size(0)
+            )
+        elif self.coords_aggr == 'sum':
+            x_aggr = self.unsorted_segment_sum(
+                x_trans, selected_src_edge_indices, num_segments=graph.ndata['x'].size(0)
+            )
+        else:
+            raise Exception(f'Invalid coords_aggr value supplied: {self.coords_aggr}')
+        graph.ndata['x'] = graph.ndata['x'] + x_aggr
+        return graph
+
+    def update_node_feats(self, graph):
+        """In an E(n) invariant manner, update the node features in the given graph."""
+        graph.ndata['m_i'] = self.unsorted_segment_sum(
+            graph.edata['m_ij'], graph.edges()[0], num_segments=graph.ndata['f'].size(0)
+        )
+        node_mlp_input = torch.cat([graph.ndata['f'], graph.ndata['m_i']], dim=1)
+        node_mlp_out = self.nodes_mlp(node_mlp_input)
+        if self.residual:
+            graph.ndata['f'] = graph.ndata['f'] + node_mlp_out
+        else:
+            graph.ndata['f'] = node_mlp_out
+        return graph
 
     def forward(
             self,
@@ -362,10 +419,10 @@ class DGLEnGraphConv(nn.Module):
         graph : DGLGraph
             DGL input graph
         """
-        # Update initial relative distances for the graph
+        # Calculate (squared and unsquared) node-node distances in the given graph
         graph = calculate_and_store_dists_in_graph(graph)
-        if self.normalize_coord_diff:
-            graph.edata['c'] /= torch.sqrt(graph.edata['r']) + self.epsilon
+        if self.normalize_coord_diff:  # Optionally normalize unsquared node-node distances
+            graph.edata['c'] = graph.edata['c'] / (torch.sqrt(graph.edata['r']) + self.epsilon)
 
         # Apply an advanced multi-head attention module to the graph's node and edge features a priori
         if self.adv_attention:
@@ -375,31 +432,16 @@ class DGLEnGraphConv(nn.Module):
                 graph.edata['f']
             )
 
-        # Create and aggregate all edge i->j (i.e. m_ij) messages into node-specific messages (i.e. m_i)
-        graph.update_all(self.message_func, fn.sum('m_ij', 'm_i'))
+        # Craft all edge i->j (i.e. m_ij) messages
+        graph.apply_edges(self.message_func)
 
-        if self.update_feats:
-            node_mlp_input = torch.cat([graph.ndata['f'], graph.ndata['m_i']], dim=1)
-            node_mlp_out = self.nodes_mlp(node_mlp_input)
-            if self.residual:
-                graph.ndata['f'] += node_mlp_out
-            else:
-                graph.ndata['f'] = node_mlp_out
-
+        # Update node coordinates if requested
         if self.update_coords:
-            edge_index_diffs = graph.edges()[1] - graph.edges()[0]
-            non_self_loop_edge_indices = (edge_index_diffs != 0).nonzero(as_tuple=False).squeeze()
-            selected_coord_diffs = graph.edata['c'][non_self_loop_edge_indices]
-            selected_edge_messages = graph.edata['m_ij'][non_self_loop_edge_indices]
+            graph = self.update_node_coords(graph)
 
-            # Default to self.coords_aggr == 'sum'
-            x_aggr = torch.sum(selected_coord_diffs * self.coords_mlp(selected_edge_messages), dim=0)
-            if self.coords_aggr == 'mean':
-                C = 1 / (selected_coord_diffs.shape[0] - 1)
-                x_aggr = C * x_aggr  # Find sample mean
-            else:
-                raise Exception(f'Invalid coords_aggr value supplied: {self.coords_aggr}')
-            graph.ndata['x'] += x_aggr
+        # Update node features if requested
+        if self.update_feats:
+            graph = self.update_node_feats(graph)
 
         return graph
 
@@ -480,8 +522,8 @@ class LitEGNN(pl.LightningModule):
                 normalize_coord_diff=False,
                 tanh=False,
                 coords_aggr='mean',
-                update_feats=True,
-                update_coords=True
+                update_coords=True,
+                update_feats=True
             )
             for _ in range(self.num_gnn_layers)
         ]

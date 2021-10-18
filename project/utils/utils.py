@@ -91,7 +91,7 @@ def calculate_and_store_dists_in_graph(graph: dgl.DGLGraph):
     """Derive all node-node distance features from a given batch of DGLGraphs."""
     graphs = dgl.unbatch(graph)
     for graph in graphs:
-        graph.edata['c'] = graph.ndata['x'][graph.edges()[1]] - graph.ndata['x'][graph.edges()[0]]
+        graph.edata['c'] = graph.ndata['x'][graph.edges()[0]] - graph.ndata['x'][graph.edges()[1]]
         graph.edata['r'] = torch.sum(graph.edata['c'] ** 2, 1).reshape(-1, 1)
     graph = dgl.batch(graphs)
     return graph
@@ -118,8 +118,27 @@ def get_graph(src, dst, pos, node_feature, edge_feature, dtype, undirected=True,
 
 
 def get_rgraph(num_nodes: int, num_edges: int, node_feature_size: int,
-               edge_feature_size: int, dtype: torch.Type, test: bool):
+               edge_feature_size: int, self_loops: bool, dtype: torch.Type, test: bool):
     G = dgl.rand_graph(num_nodes, num_edges)
+    if not self_loops:
+        G = dgl.remove_self_loop(G)  # Keep self-loops out of each randomly-generated graph for compatibility with EGNNs
+        graph_edges = torch.stack(G.edges(), dim=0).T
+        for edge_i in range(num_nodes):
+            for edge_j in range(num_nodes):
+                if edge_i != edge_j:
+                    random_edge = torch.tensor([edge_i, edge_j])
+                    should_add_edge = True
+                    for edge in graph_edges:
+                        # Ascertain whether the randomly-generated edge already exists
+                        should_add_edge = not torch.equal(random_edge, edge)
+                        if not should_add_edge:
+                            break
+                    if should_add_edge:
+                        G = dgl.add_edges(G, random_edge[0], random_edge[1])
+                        graph_edges = torch.stack(G.edges(), dim=0).T
+                        edge_count_is_full = num_edges - len(G.edges()[0]) == 0
+                        if edge_count_is_full:
+                            break
     if test:
         src = torch.tensor([0, 0, 0, 1, 1, 1, 2, 2, 2, 3, 3, 3])
         dst = torch.tensor([1, 2, 3, 0, 2, 3, 0, 1, 3, 0, 1, 2])
