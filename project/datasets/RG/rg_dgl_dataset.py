@@ -23,7 +23,8 @@ class RGDGLDataset(Dataset):
         self.num_nodes = np.random.randint(self.n_lb, self.n_hb, self.size)
         self.num_edges = np.random.randint(self.e_lb, self.e_hb, self.size)
         self.g_list = [get_rgraph(self.num_nodes[i], self.num_edges[i],
-                                  self.node_feature_size, self.edge_feature_size, self.dtype) for i in range(size)]
+                                  self.node_feature_size, self.edge_feature_size,
+                                  self_loops=False, dtype=self.dtype, test=False) for i in range(size)]
         self.y = np.random.random((self.size, self.out_dim)).astype(self.dtype)
 
     def __len__(self):
