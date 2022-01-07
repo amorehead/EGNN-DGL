@@ -10,11 +10,11 @@ setup(
     author_email='alex.morehead@gmail.com',
     url='https://github.com/amorehead/EGNN-DGL',
     install_requires=[
-        'setuptools==57.4.0',
-        'torchmetrics==0.5.1',
-        'wandb==0.12.2',
-        'pytorch-lightning==1.4.8',
-        'fairscale==0.4.0'
+        'setuptools==60.3.1',
+        'torchmetrics==0.6.2',
+        'wandb==0.12.9',
+        'pytorch-lightning==1.5.8',
+        'fairscale==0.4.4'
     ],
     packages=find_packages(),
 )
