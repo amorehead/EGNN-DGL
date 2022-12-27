@@ -13,7 +13,7 @@ setup(
         'setuptools==65.5.1',
         'torchmetrics==0.6.2',
         'wandb==0.12.9',
-        'pytorch-lightning==1.5.8',
+        'pytorch-lightning==1.6.0',
         'fairscale==0.4.4'
     ],
     packages=find_packages(),
